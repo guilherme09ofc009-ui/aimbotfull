@@ -1,64 +1,549 @@
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Camera = workspace.CurrentCamera
-local LP = Players.LocalPlayer
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+-- Variables
+local player = game.Players.LocalPlayer
+local mouse = player:GetMouse()
+local lockOnRange = 50 -- Range within which the aimbot can lock onto a player
+local camera = workspace.CurrentCamera
+local isLockedOn = false -- Tracks whether the aimbot is currently locked on
 
-local settings = {
-    SilentAim = true,
-    TeamCheck = true,
-    WallCheck = true,
-    FOV = 150,
-    TargetPart = "Head"
-}
+-- ESP Variables
+local espEnabled = true -- Toggle ESP on/off
+local espColor = Color3.new(1, 0, 0) -- Red color for ESP
+local espThickness = 1 -- Thickness of ESP lines
+local espTransparency = 0.5 -- Transparency of ESP lines
+local espFontSize = 14 -- Font size for player names
+local espFont = Drawing.Fonts.UI -- Font for player names
 
--- Visualização do FOV
-local fovCircle = Drawing.new("Circle")
-fovCircle.Radius = settings.FOV
-fovCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-fovCircle.Color = Color3.fromRGB(255, 255, 255)
-fovCircle.Visible = true
+-- Shoot Through Walls Variables
+local shootThroughWallsEnabled = true -- Toggle shoot through walls on/off
+local raycastParams = RaycastParams.new()
+raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+raycastParams.FilterDescendantsInstances = {player.Character} -- Ignore the player's own character
 
-local function getClosest()
-    local closest, dist = nil, math.huge
-    for _, v in pairs(Players:GetPlayers()) do
-        if v ~= LP and v.Character and v.Character:FindFirstChild(settings.TargetPart) then
-            if settings.TeamCheck and v.Team == LP.Team then continue end
-            
-            local pos, onScreen = Camera:WorldToViewportPoint(v.Character[settings.TargetPart].Position)
-            local mag = (Vector2.new(pos.X, pos.Y) - UserInputService:GetMouseLocation()).Magnitude
-            
-            if onScreen and mag < settings.FOV then
-                if settings.WallCheck then
-                    local ray = workspace:Raycast(Camera.CFrame.Position, (v.Character[settings.TargetPart].Position - Camera.CFrame.Position), RaycastParams.new())
-                    if ray and ray.Instance:IsDescendantOf(v.Character) then
-                        if mag < dist then closest = v.Character[settings.TargetPart]; dist = mag end
+-- Invisibility Variables
+local isInvisible = false -- Tracks whether the player is invisible
+
+-- Fly Variables
+local isFlying = false -- Tracks whether the player is flying
+local flySpeed = 50 -- Speed of flying
+local bodyVelocity -- BodyVelocity instance for flying
+local userInputService = game:GetService("UserInputService") -- For detecting key presses
+
+-- NoClip Variables
+local isNoClip = false -- Tracks whether NoClip is enabled
+local noClipConnection -- Connection for NoClip loop
+
+-- God Mode Variables
+local isGodMode = false -- Tracks whether God Mode is enabled
+
+-- Store ESP drawings for each player
+local espDrawings = {}
+
+-- Create GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player.PlayerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 250, 0, 600) -- Increased height to accommodate the ScrollingFrame
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+frame.BackgroundTransparency = 0.2
+frame.BorderSizePixel = 0
+frame.Active = true -- Allow frame to be draggable
+frame.Draggable = true -- Make frame draggable
+frame.Parent = screenGui
+
+-- Add header
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 30)
+header.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+header.BorderSizePixel = 0
+header.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -20, 1, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
+title.Text = "Aimbot Arena"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.BackgroundTransparency = 1
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 18
+title.Parent = header
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -25, 0.5, -10)
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.new(1, 1, 1)
+closeButton.BackgroundColor3 = Color3.new(0.5, 0, 0)
+closeButton.BorderSizePixel = 0
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.TextSize = 14
+closeButton.Parent = header
+
+-- Close button functionality
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy() -- Hide the GUI
+end)
+
+-- Create ScrollingFrame
+local scrollingFrame = Instance.new("ScrollingFrame")
+scrollingFrame.Size = UDim2.new(1, -10, 1, -40) -- Leave space for header and padding
+scrollingFrame.Position = UDim2.new(0, 5, 0, 35)
+scrollingFrame.BackgroundTransparency = 1
+scrollingFrame.ScrollBarThickness = 5
+scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 1000) -- Adjust based on content
+scrollingFrame.Parent = frame
+
+-- Function to create a section header
+local function createSectionHeader(text, position, parent)
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(0, 230, 0, 20)
+    header.Position = position
+    header.Text = text
+    header.TextColor3 = Color3.new(1, 1, 1)
+    header.BackgroundTransparency = 1
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 16
+    header.Parent = parent
+    return header
+end
+
+-- Function to create a toggle button
+local function createToggleButton(text, position, parent)
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Size = UDim2.new(0, 230, 0, 40)
+    toggleButton.Position = position
+    toggleButton.Text = text
+    toggleButton.BackgroundColor3 = Color3.new(0.3, 0.3, 0.3)
+    toggleButton.TextColor3 = Color3.new(1, 1, 1)
+    toggleButton.Font = Enum.Font.SourceSansBold
+    toggleButton.TextSize = 14
+    toggleButton.BorderSizePixel = 0
+    toggleButton.Parent = parent
+    return toggleButton
+end
+
+-- Function to create a textbox with label
+local function createTextBox(labelText, placeholderText, position, parent)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 230, 0, 20)
+    label.Position = position
+    label.Text = labelText
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Font = Enum.Font.SourceSans
+    label.TextSize = 14
+    label.Parent = parent
+
+    local textBox = Instance.new("TextBox")
+    textBox.Size = UDim2.new(0, 230, 0, 30)
+    textBox.Position = UDim2.new(0, 0, 0, 20)
+    textBox.PlaceholderText = placeholderText
+    textBox.BackgroundColor3 = Color3.new(0.3, 0.3, 0.3)
+    textBox.TextColor3 = Color3.new(1, 1, 1)
+    textBox.Font = Enum.Font.SourceSans
+    textBox.TextSize = 14
+    textBox.Parent = label
+    return textBox
+end
+
+-- Section: Visuals
+local visualsHeader = createSectionHeader("Visuals", UDim2.new(0, 0, 0, 10), scrollingFrame)
+
+-- Add ESP Toggle
+local espToggle = createToggleButton("ESP: ON", UDim2.new(0, 0, 0, 40), scrollingFrame)
+
+-- Add Wall Hacks Toggle
+local wallhackToggle = createToggleButton("Wall Hacks: ON", UDim2.new(0, 0, 0, 90), scrollingFrame)
+
+-- Add Invisibility Toggle
+local invisibilityToggle = createToggleButton("Invisibility: OFF", UDim2.new(0, 0, 0, 140), scrollingFrame)
+
+-- Section: Movement
+local movementHeader = createSectionHeader("Movement", UDim2.new(0, 0, 0, 190), scrollingFrame)
+
+-- Add Fly Toggle
+local flyToggle = createToggleButton("Fly: OFF", UDim2.new(0, 0, 0, 220), scrollingFrame)
+
+-- Add NoClip Toggle
+local noClipToggle = createToggleButton("NoClip: OFF", UDim2.new(0, 0, 0, 270), scrollingFrame)
+
+-- Add WalkSpeed TextBox
+local walkSpeedBox = createTextBox("WalkSpeed:", "Enter WalkSpeed", UDim2.new(0, 0, 0, 320), scrollingFrame)
+
+-- Add JumpPower TextBox
+local jumpPowerBox = createTextBox("JumpPower:", "Enter JumpPower", UDim2.new(0, 0, 0, 380), scrollingFrame)
+
+-- Section: Player Mods
+local playerModsHeader = createSectionHeader("Player Mods", UDim2.new(0, 0, 0, 430), scrollingFrame)
+
+-- Add God Mode Toggle
+local godModeToggle = createToggleButton("God Mode: OFF", UDim2.new(0, 0, 0, 460), scrollingFrame)
+
+-- Add Health TextBox
+local healthBox = createTextBox("Health:", "Enter Health", UDim2.new(0, 0, 0, 510), scrollingFrame)
+
+-- Section: Player Actions
+local playerActionsHeader = createSectionHeader("Player Actions", UDim2.new(0, 0, 0, 560), scrollingFrame)
+
+-- Add Teleport Dropdown
+local teleportLabel = Instance.new("TextLabel")
+teleportLabel.Size = UDim2.new(0, 230, 0, 20)
+teleportLabel.Position = UDim2.new(0, 0, 0, 590)
+teleportLabel.Text = "Teleport to Player:"
+teleportLabel.TextColor3 = Color3.new(1, 1, 1)
+teleportLabel.BackgroundTransparency = 1
+teleportLabel.TextXAlignment = Enum.TextXAlignment.Left
+teleportLabel.Font = Enum.Font.SourceSans
+teleportLabel.TextSize = 14
+teleportLabel.Parent = scrollingFrame
+
+local teleportDropdown = Instance.new("TextButton")
+teleportDropdown.Size = UDim2.new(0, 230, 0, 30)
+teleportDropdown.Position = UDim2.new(0, 0, 0, 610)
+teleportDropdown.Text = "Select Player"
+teleportDropdown.BackgroundColor3 = Color3.new(0.3, 0.3, 0.3)
+teleportDropdown.TextColor3 = Color3.new(1, 1, 1)
+teleportDropdown.Font = Enum.Font.SourceSans
+teleportDropdown.TextSize = 14
+teleportDropdown.Parent = scrollingFrame
+
+-- Add Kill Player Dropdown
+local killPlayerLabel = Instance.new("TextLabel")
+killPlayerLabel.Size = UDim2.new(0, 230, 0, 20)
+killPlayerLabel.Position = UDim2.new(0, 0, 0, 650)
+killPlayerLabel.Text = "Kill Player:"
+killPlayerLabel.TextColor3 = Color3.new(1, 1, 1)
+killPlayerLabel.BackgroundTransparency = 1
+killPlayerLabel.TextXAlignment = Enum.TextXAlignment.Left
+killPlayerLabel.Font = Enum.Font.SourceSans
+killPlayerLabel.TextSize = 14
+killPlayerLabel.Parent = scrollingFrame
+
+local killPlayerDropdown = Instance.new("TextButton")
+killPlayerDropdown.Size = UDim2.new(0, 230, 0, 30)
+killPlayerDropdown.Position = UDim2.new(0, 0, 0, 670)
+killPlayerDropdown.Text = "Select Player"
+killPlayerDropdown.BackgroundColor3 = Color3.new(0.3, 0.3, 0.3)
+killPlayerDropdown.TextColor3 = Color3.new(1, 1, 1)
+killPlayerDropdown.Font = Enum.Font.SourceSans
+killPlayerDropdown.TextSize = 14
+killPlayerDropdown.Parent = scrollingFrame
+
+-- Add Respawn Button
+local respawnButton = createToggleButton("Respawn", UDim2.new(0, 0, 0, 710), scrollingFrame)
+
+-- Section: Aimbot
+local aimbotHeader = createSectionHeader("Aimbot", UDim2.new(0, 0, 0, 760), scrollingFrame)
+
+-- Add Aimbot Toggle
+local aimbotToggle = createToggleButton("Aimbot: ON", UDim2.new(0, 0, 0, 790), scrollingFrame)
+
+-- Function to toggle ESP
+espToggle.MouseButton1Click:Connect(function()
+    espEnabled = not espEnabled
+    espToggle.Text = "ESP: " .. (espEnabled and "ON" or "OFF")
+    if espEnabled then
+        -- Recreate ESP for all players
+        for _, otherPlayer in pairs(game.Players:GetPlayers()) do
+            if otherPlayer ~= player then
+                createESP(otherPlayer)
+            end
+        end
+    else
+        -- Clear all ESP drawings
+        for _, drawings in pairs(espDrawings) do
+            for _, drawing in pairs(drawings) do
+                drawing:Remove()
+            end
+        end
+        espDrawings = {}
+    end
+end)
+
+-- Function to toggle Aimbot
+aimbotToggle.MouseButton1Click:Connect(function()
+    isLockedOn = not isLockedOn
+    aimbotToggle.Text = "Aimbot: " .. (isLockedOn and "ON" or "OFF")
+end)
+
+-- Function to toggle Wall Hacks
+wallhackToggle.MouseButton1Click:Connect(function()
+    shootThroughWallsEnabled = not shootThroughWallsEnabled
+    wallhackToggle.Text = "Wall Hacks: " .. (shootThroughWallsEnabled and "ON" or "OFF")
+end)
+
+-- Function to toggle Invisibility
+invisibilityToggle.MouseButton1Click:Connect(function()
+    isInvisible = not isInvisible
+    invisibilityToggle.Text = "Invisibility: " .. (isInvisible and "ON" or "OFF")
+
+    if player.Character then
+        for _, part in pairs(player.Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Transparency = isInvisible and 1 or 0
+                part.CastShadow = not isInvisible
+            end
+        end
+    end
+end)
+
+-- Function to toggle Fly
+flyToggle.MouseButton1Click:Connect(function()
+    isFlying = not isFlying
+    flyToggle.Text = "Fly: " .. (isFlying and "ON" or "OFF")
+
+    if isFlying then
+        -- Enable flying
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            bodyVelocity = Instance.new("BodyVelocity")
+            bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            bodyVelocity.MaxForce = Vector3.new(0, 0, 0) -- Temporarily disable force
+            bodyVelocity.Parent = player.Character.HumanoidRootPart
+        end
+    else
+        -- Disable flying
+        if bodyVelocity then
+            bodyVelocity:Destroy()
+            bodyVelocity = nil
+        end
+    end
+end)
+
+-- Function to toggle NoClip
+noClipToggle.MouseButton1Click:Connect(function()
+    isNoClip = not isNoClip
+    noClipToggle.Text = "NoClip: " .. (isNoClip and "ON" or "OFF")
+
+    if isNoClip then
+        -- Enable NoClip
+        if player.Character then
+            for _, part in pairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+            noClipConnection = game:GetService("RunService").Stepped:Connect(function()
+                if player.Character then
+                    for _, part in pairs(player.Character:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.CanCollide = false
+                        end
                     end
-                else
-                    if mag < dist then closest = v.Character[settings.TargetPart]; dist = mag end
+                end
+            end)
+        end
+    else
+        -- Disable NoClip
+        if noClipConnection then
+            noClipConnection:Disconnect()
+            noClipConnection = nil
+        end
+        if player.Character then
+            for _, part in pairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
                 end
             end
         end
     end
-    return closest
-end
+end)
 
--- Hook de Silent Aim (Intercepta disparos)
-local mt = getrawmetatable(game)
-local old = mt.__namecall
-setreadonly(mt, false)
+-- Function to toggle God Mode
+godModeToggle.MouseButton1Click:Connect(function()
+    isGodMode = not isGodMode
+    godModeToggle.Text = "God Mode: " .. (isGodMode and "ON" or "OFF")
 
-mt.__namecall = newcclosure(function(self, ...)
-    local args = {...}
-    local method = getnamecallmethod()
-    
-    if settings.SilentAim and (method == "FireServer" or method == "InvokeServer") and tostring(self) == "ShootEvent" then
-        local target = getClosest()
-        if target then
-            args[1] = target.Position -- Redireciona o vetor do disparo
-            return old(self, unpack(args))
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.MaxHealth = isGodMode and math.huge or 100
+        player.Character.Humanoid.Health = isGodMode and math.huge or 100
+    end
+end)
+
+-- Function to update WalkSpeed
+walkSpeedBox.FocusLost:Connect(function()
+    local walkSpeedValue = tonumber(walkSpeedBox.Text)
+    if walkSpeedValue and player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.WalkSpeed = walkSpeedValue
+    else
+        walkSpeedBox.Text = "" -- Clear invalid input
+    end
+end)
+
+-- Function to update JumpPower
+jumpPowerBox.FocusLost:Connect(function()
+    local jumpPowerValue = tonumber(jumpPowerBox.Text)
+    if jumpPowerValue and player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.JumpPower = jumpPowerValue
+    else
+        jumpPowerBox.Text = "" -- Clear invalid input
+    end
+end)
+
+-- Function to update Health
+healthBox.FocusLost:Connect(function()
+    local healthValue = tonumber(healthBox.Text)
+    if healthValue and player.Character and player.Character:FindFirstChild("Humanoid") then
+        local humanoid = player.Character.Humanoid
+        humanoid.MaxHealth = healthValue
+        humanoid.Health = healthValue
+    else
+        healthBox.Text = "" -- Clear invalid input
+    end
+end)
+
+-- Function to teleport to a player
+teleportDropdown.MouseButton1Click:Connect(function()
+    local players = game.Players:GetPlayers()
+    local playerNames = {}
+    for _, otherPlayer in pairs(players) do
+        if otherPlayer ~= player then
+            table.insert(playerNames, otherPlayer.Name)
         end
     end
-    return old(self, ...)
+
+    local selectedPlayer = playerNames[1] -- Default to the first player
+    if #playerNames > 1 then
+        -- Open a simple dropdown menu (you can replace this with a proper GUI dropdown)
+        selectedPlayer = playerNames[math.random(1, #playerNames)]
+    end
+
+    if selectedPlayer then
+        local targetPlayer = game.Players:FindFirstChild(selectedPlayer)
+        if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            player.Character:MoveTo(targetPlayer.Character.HumanoidRootPart.Position)
+        end
+    end
 end)
-setreadonly(mt, true)
+
+-- Function to kill a player
+killPlayerDropdown.MouseButton1Click:Connect(function()
+    local players = game.Players:GetPlayers()
+    local playerNames = {}
+    for _, otherPlayer in pairs(players) do
+        if otherPlayer ~= player then
+            table.insert(playerNames, otherPlayer.Name)
+        end
+    end
+
+    local selectedPlayer = playerNames[1] -- Default to the first player
+    if #playerNames > 1 then
+        -- Open a simple dropdown menu (you can replace this with a proper GUI dropdown)
+        selectedPlayer = playerNames[math.random(1, #playerNames)]
+    end
+
+    if selectedPlayer then
+        local targetPlayer = game.Players:FindFirstChild(selectedPlayer)
+        if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Humanoid") then
+            targetPlayer.Character.Humanoid.Health = 0
+        end
+    end
+end)
+
+-- Function to respawn the player
+respawnButton.MouseButton1Click:Connect(function()
+    if player.Character then
+        -- Kill the player
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid.Health = 0
+        end
+    end
+    -- Respawn the player
+    player:LoadCharacter()
+end)
+
+-- Function to handle flying
+local function handleFlying()
+    if isFlying and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local rootPart = player.Character.HumanoidRootPart
+        local direction = Vector3.new(0, 0, 0)
+
+        -- Movement based on input
+        if userInputService:IsKeyDown(Enum.KeyCode.W) then
+            direction = direction + camera.CFrame.LookVector
+        end
+        if userInputService:IsKeyDown(Enum.KeyCode.S) then
+            direction = direction - camera.CFrame.LookVector
+        end
+        if userInputService:IsKeyDown(Enum.KeyCode.A) then
+            direction = direction - camera.CFrame.RightVector
+        end
+        if userInputService:IsKeyDown(Enum.KeyCode.D) then
+            direction = direction + camera.CFrame.RightVector
+        end
+        if userInputService:IsKeyDown(Enum.KeyCode.Space) then
+            direction = direction + Vector3.new(0, 1, 0)
+        end
+        if userInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+            direction = direction - Vector3.new(0, 1, 0)
+        end
+
+        -- Normalize direction and apply speed
+        if direction.Magnitude > 0 then
+            direction = direction.Unit * flySpeed
+        end
+
+        -- Update BodyVelocity
+        if bodyVelocity then
+            bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge) -- Enable force
+            bodyVelocity.Velocity = direction
+        end
+    elseif bodyVelocity then
+        -- Disable force when not flying
+        bodyVelocity.MaxForce = Vector3.new(0, 0, 0)
+    end
+end
+
+-- Function to check if a player is alive
+local function isPlayerAlive(playerCharacter)
+    local humanoid = playerCharacter:FindFirstChild("Humanoid")
+    return humanoid and humanoid.Health > 0
+end
+
+-- Function to find the nearest player's head based on camera view
+local function findNearestPlayerHead()
+    local nearestPlayer = nil
+    local nearestAngle = math.huge -- Start with a very large angle
+    local playerPosition = player.Character and player.Character:FindFirstChild("Head").Position
+
+    if not playerPosition then return nil end
+
+    -- Get the camera's look vector
+    local cameraLookVector = camera.CFrame.LookVector
+
+    -- Loop through all players in the game
+    for _, otherPlayer in pairs(game.Players:GetPlayers()) do
+        -- Skip the local player
+        if otherPlayer ~= player and otherPlayer.Character then
+            local head = otherPlayer.Character:FindFirstChild("Head")
+            if head and isPlayerAlive(otherPlayer.Character) then
+                -- Calculate the vector from the camera to the player's head
+                local toHead = (head.Position - camera.CFrame.Position).Unit
+                -- Calculate the angle between the camera's look vector and the vector to the player's head
+                local angle = math.deg(math.acos(cameraLookVector:Dot(toHead)))
+
+                -- Check if this player is closer to the center of the screen
+                if angle < nearestAngle then
+                    nearestPlayer = head
+                    nearestAngle = angle
+                end
+            end
+        end
+    end
+
+    return nearestPlayer
+end
+
+-- Lock onto the nearest player's head
+local function lockOntoNearestPlayer()
+    while isLockedOn do
+        local nearestHead = findNearestPlayerHead()
+        if nearestHead then
+        
